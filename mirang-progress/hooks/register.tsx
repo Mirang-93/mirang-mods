@@ -25,6 +25,11 @@ const MAX_AFTER = 20
 const MAX_TITLE = 120
 const ACCENT = '#8f8cf4'
 const DONE = '#5fbf8f'
+const WAIT = '#BA7517'
+const HALT = '#D85A30'
+
+// Finished green, waiting for the person amber, stopped or failed red, else the accent.
+const flowColor = (f: Flow): string => (f.isFinished ? DONE : f.state === 'waiting' ? WAIT : f.state ? HALT : ACCENT)
 
 type ProgressInput = {
   title?: string
@@ -48,7 +53,7 @@ const STRINGS = {
     empty: '작업 대기 중', round: '회차', failed: '중단/오류', after: '이후',
     tokensWord: '토큰', agentsCount: '작업자', isRunning: '진행 중', isFinished: '종료',
     isPlanned: '예정', opened: '작업 진행도 패널을 열었습니다.', closed: '패널을 닫았습니다.',
-    done: '응답 완료', plan: '계획', design: '설계', tasks: '작업', review: '검증', busy: '진행 중', ctx: '맥락',
+    done: '응답 완료', complete: '작업 완료', waiting: '답변 대기', unconfirmed: '완료 보고 전', stopped: '중단', errored: '오류', unpriced: '단가 미상', plan: '계획', design: '설계', tasks: '작업', review: '검증', busy: '진행 중', ctx: '맥락',
     tier: { light: '가벼운 작업', medium: '일반 작업', careful: '검토', heavy: '복잡한 작업', fable: '고난도', other: '작업자' },
     effort: { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대' },
   },
@@ -74,6 +79,12 @@ const STRINGS = {
     opened: 'Agents panel opened.',
     closed: 'Agents panel closed.',
     done: 'Done',
+    complete: 'Complete',
+    waiting: 'Waiting',
+    unconfirmed: 'Not confirmed',
+    stopped: 'Stopped',
+    errored: 'Error',
+    unpriced: 'price unknown',
     plan: 'Plan',
     design: 'Design',
     tasks: 'Tasks',
@@ -105,6 +116,12 @@ const STRINGS = {
     opened: 'Панель агентов открыта.',
     closed: 'Панель агентов закрыта.',
     done: 'Готово',
+    complete: 'Завершено',
+    waiting: 'Ожидание',
+    unconfirmed: 'Не подтверждено',
+    stopped: 'Остановлено',
+    errored: 'Ошибка',
+    unpriced: 'цена неизвестна',
     plan: 'План',
     design: 'Дизайн',
     tasks: 'Задачи',
@@ -136,6 +153,12 @@ const STRINGS = {
     opened: 'חלונית הסוכנים נפתחה.',
     closed: 'חלונית הסוכנים נסגרה.',
     done: 'הושלם',
+    complete: 'הושלם',
+    waiting: 'ממתין',
+    unconfirmed: 'לא אושר',
+    stopped: 'נעצר',
+    errored: 'שגיאה',
+    unpriced: 'מחיר לא ידוע',
     plan: 'תכנון',
     design: 'עיצוב',
     tasks: 'משימות',
@@ -203,13 +226,19 @@ const merge = (prev: Flow | null, input: ProgressInput): Flow => {
     done,
     phase: input.finished ? 'close' : phase,
     isFinished: input.finished === true,
+    state: undefined,
     tasks,
   }
 }
 
 const label = (f: Flow): string => {
   const s = tr()
-  if (f.isFinished) return s.done
+  // A reported flow whose steps are all done is complete; a turn with no reported steps only answered.
+  if (f.isFinished) return f.total ? s.complete : s.done
+  const halt = f.state === 'waiting' ? s.waiting : f.state === 'stopped' ? s.stopped : f.state === 'error' ? s.errored : ''
+  // Every step done but no `finished` yet: not complete, and not a question to the person either.
+  if (f.state === 'waiting' && f.total && f.done >= f.total) return `${s.unconfirmed} ${f.done}/${f.total}`
+  if (halt) return f.total ? `${halt} ${f.done}/${f.total}` : halt
   if (!f.total) return f.title === '작업 대기' ? '대기' : '단계 미보고'
   if (f.phase === 'plan') return s.plan
   if (f.phase === 'design') return s.design
@@ -268,7 +297,7 @@ const rowSvg = (f: Flow, W: number, isWorking: boolean): string => {
   const title = fitText(f.title, 13, Math.max(60, W * 0.4))
   const BAR_X = Math.round(16 + textWidth(title, 13) + 12)
   const BAR_W = Math.max(60, W - BAR_X - 46 - CRAB_W)
-  const color = f.isFinished ? DONE : ACCENT
+  const color = flowColor(f)
   const y0 = (H - BAR_H) / 2
   const fillW = Math.round(BAR_W * ratio(f))
   const runW = f.total ? Math.round((BAR_W * Math.min(f.total, f.done + f.running)) / f.total) : 0
@@ -407,17 +436,23 @@ type Usage = {
   cache_creation_input_tokens: number
 }
 
-const priceOf = (model: string, prompt: number): Price => {
+const priceOf = (model: string, prompt: number): Price | null => {
   const id = model.toLowerCase()
   if (prompt > HAIKU_LONG_PROMPT && /haiku-5-5/.test(id)) return HAIKU_LONG
-  return PRICES.find(([re]) => re.test(id))?.[1] ?? [4, 20, 0.2, 8]
+  return PRICES.find(([re]) => re.test(id))?.[1] ?? null
 }
+
+// A model no row prices (another provider, a newer release) is not guessed at: it adds
+// nothing to the cost and marks the run so the panel says the figure is incomplete.
+const isPriced = (model: string): boolean => PRICES.some(([re]) => re.test(model.toLowerCase()))
 
 // `isRequest` says the usage is one model request, which is what a prompt-length price
 // is set by; a turn's sum is priced at the model's ordinary prices.
 const costOf = (model: string, u: Usage, isRequest: boolean): number => {
   const prompt = isRequest ? (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) : 0
-  const [i, o, r, w] = priceOf(model, prompt)
+  const price = priceOf(model, prompt)
+  if (!price) return 0
+  const [i, o, r, w] = price
   return (
     ((u.input_tokens || 0) * i +
       (u.output_tokens || 0) * o +
@@ -456,6 +491,10 @@ const fmtTokens = (n: number): string =>
 
 const fmtCost = (usd: number): string => `$${usd < 10 ? usd.toFixed(2) : usd.toFixed(1)}`
 
+// "≈$1.20" estimated; "≈$1.20+" when some of it ran on a model with no known price.
+const costText = (usd: number, isPartial?: boolean): string =>
+  isPartial ? (usd > 0 ? `≈${fmtCost(usd)}+` : tr().unpriced) : `≈${fmtCost(usd)}`
+
 const fmtTime = (ms: number): string => {
   const s = Math.max(0, Math.round(ms / 1000))
   const h = Math.floor(s / 3600)
@@ -464,7 +503,8 @@ const fmtTime = (ms: number): string => {
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
 }
 
-const elapsed = (a: AgentRun, at: number): number => (a.endedAt ?? Math.max(at, a.startedAt)) - a.startedAt
+// Earlier turns of the same flow count their own length, not the wait between them.
+const elapsed = (a: AgentRun, at: number): number => (a.priorMs ?? 0) + (a.endedAt ?? Math.max(at, a.startedAt)) - a.startedAt
 
 type Planned = PlannedTask & { n: number }
 
@@ -477,15 +517,24 @@ const plannedOf = (f: Flow | null, list: AgentRun[]): Planned[] => {
 // One model request added to a run: its context is the request's prompt plus answer.
 const withRequest = (a: AgentRun, model: string, usage: Usage): AgentRun => {
   const sum = (usage.input_tokens || 0) + (usage.output_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0)
-  return { ...a, model, contextTokens: sum, contextMax: windowOf(model), tokens: a.tokens + sum, costUsd: a.costUsd + costOf(model, usage, true), steps: a.steps + 1 }
+  return { ...a, model, contextTokens: sum, contextMax: windowOf(model), tokens: a.tokens + sum, costUsd: a.costUsd + costOf(model, usage, true), isPriceUnknown: a.isPriceUnknown || !isPriced(model), steps: a.steps + 1 }
 }
 
-const totals = (list: AgentRun[], at: number) => {
+// Workers still running when a new flow starts stay in view, marked as the earlier
+// flow's: what they report later never adds to the new flow's totals.
+const carryOver = (list: AgentRun[]): AgentRun[] => list.filter(a => a.status === 'running').map(a => ({ ...a, isCarried: true }))
+
+const totals = (all: AgentRun[], at: number) => {
+  const list = all.filter(a => !a.isCarried)
   const cost = list.reduce((s, a) => s + a.costUsd, 0)
   const tokens = list.reduce((s, a) => s + a.tokens, 0)
+  const isPartial = list.some(a => a.isPriceUnknown)
+  // With the main session in the list its own working time is the flow's; workers alone span start to end.
+  const lead = list.find(a => a.type === 'main')
+  if (lead) return { cost, tokens, isPartial, time: elapsed(lead, at) }
   const start = Math.min(...list.map(a => a.startedAt))
   const end = Math.max(...list.map(a => a.endedAt ?? Math.max(at, a.startedAt)))
-  return { cost, tokens, time: list.length ? end - start : 0 }
+  return { cost, tokens, isPartial, time: list.length ? end - start : 0 }
 }
 
 // --- desktop drawings: each row is one SVG, as the band above the prompt is.
@@ -681,7 +730,7 @@ const headerSvg = (W: number, title: string, t: ReturnType<typeof totals>): stri
     W,
     headerHeight(title),
     `${title ? `<text class="t" ${startText(W, 0, 15)} font-family="${FONT}" font-size="14" font-weight="600">${xml(fitText(title, 14, W))}</text>` : ''}
-${tile(0, s.cost, '≈' + fmtCost(t.cost))}${tile(1, s.tokens, fmtTokens(t.tokens))}${tile(2, s.time, fmtTime(t.time))}`,
+${tile(0, s.cost, costText(t.cost, t.isPartial))}${tile(1, s.tokens, fmtTokens(t.tokens))}${tile(2, s.time, fmtTime(t.time))}`,
   )
 }
 
@@ -706,9 +755,10 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   const meta = [runModel(a)]
   if (a.round > 1) meta.push(`${s.round} ${a.round}`)
   if (a.status === 'failed') meta.push(s.failed)
+  if (a.isCarried) meta.push('이전 작업')
   const barW = textW
   const progress = progressOf(a)
-  const stats = a.type === 'main' ? `${a.stepTotal ? '보고된 단계' : '단계 미보고'} · ${fmtTokens(a.tokens)}  ≈${fmtCost(a.costUsd)}  ${fmtTime(elapsed(a, at))}` : `${s.ctx} ${ctx}% · ${fmtTokens(a.contextTokens)}  ≈${fmtCost(a.costUsd)}  ${fmtTime(elapsed(a, at))}`
+  const stats = a.type === 'main' ? `${a.stepTotal ? '보고된 단계' : '단계 미보고'} · ${fmtTokens(a.tokens)}  ${costText(a.costUsd, a.isPriceUnknown)}  ${fmtTime(elapsed(a, at))}` : `${s.ctx} ${ctx}% · ${fmtTokens(a.contextTokens)}  ${costText(a.costUsd, a.isPriceUnknown)}  ${fmtTime(elapsed(a, at))}`
   const steps = a.stepTotal ? `${a.stepDone ?? 0}/${a.stepTotal}${a.stepNote ? ' · ' + a.stepNote : ''}` : ''
   const stepsW = Math.max(0, barW - textWidth(stats, 11) - 12)
   // Without reported steps the bar falls back to the context, drawn grey.
@@ -761,7 +811,7 @@ const compactSvg = (W: number, list: AgentRun[], planned: Planned[], t: ReturnTy
     W,
     32,
     `${body}${more ? `<text class="s" ${startText(W, x, 21, false)} font-family="${FONT}" font-size="12">+${more}</text>` : ''}
-<text class="s" ${endText(W, W, 21)} font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">≈${fmtCost(t.cost)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
+<text class="s" ${endText(W, W, 21)} font-family="${FONT}" font-size="12" font-variant-numeric="tabular-nums">${costText(t.cost, t.isPartial)} · ${fmtTokens(t.tokens)} · ${fmtTime(t.time)}</text>`,
   )
 }
 
@@ -778,9 +828,11 @@ const STATUS_GLYPH: Record<string, string> = { running: '●', done: '✓', fail
 async function togglePane($: EngineInterface): Promise<boolean> {
   const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
   if (isOpen) {
+    await setClosedByUser($, true)
     await $.ui.close({ id: PANE })
     return false
   }
+  await setClosedByUser($, false)
   const at = await $.clock.now()
   await update($, now, () => at)
   await $.ui.open({ id: PANE, title: tr().pane }).catch(() => {})
@@ -791,7 +843,36 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
   const p = await read($, panel)
   if (p.autoOpenedFor === key) return
   await update($, panel, prev => ({ ...prev, autoOpenedFor: key }))
-  void $.ui.open({ id: PANE, title: tr().pane }).catch(() => {})
+  await openPane($)
+}
+
+// Opens the pane on the mod's own account, unless the person closed it: then only
+// `/work-progress` brings it back.
+async function openPane($: EngineInterface): Promise<void> {
+  if ((await read($, panel)).isClosedByUser) return
+  await $.ui.open({ id: PANE, title: tr().pane }).catch(() => {})
+}
+
+const setClosedByUser = ($: EngineInterface, isClosed: boolean) => update($, panel, p => ({ ...p, isClosedByUser: isClosed }))
+
+// The end of a main turn says how the turn ended, not whether the work is done.
+// A turn with nothing reported only answered. A reported flow is complete only when the
+// model says `finished: true`: all steps done is not enough, since a check may remain.
+const endOfTurn = (f: Flow, reason: string): Flow => {
+  if (f.isFinished) return f
+  if (reason !== 'answer') return { ...f, state: reason === 'aborted' || reason === 'interrupted' ? 'stopped' : 'error' }
+  if (!f.total && !f.tasks.length) return { ...f, isFinished: true }
+  return { ...f, state: 'waiting' }
+}
+
+// The session's own context window, when the engine reports it; else the model's guess stays.
+async function contextWindow($: EngineInterface): Promise<number | undefined> {
+  try {
+    const w = (await $.session.usage()).context?.window
+    return typeof w === 'number' && w > 0 ? w : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -799,7 +880,7 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     lang = await detectLang($, options.language)
     await update($, flow, p => p ?? blank())
-    await $.ui.open({ id: PANE, title: tr().pane }).catch(() => {})
+    await openPane($)
     await $.tool.register({
       name: 'progress',
       isDeferred: false,
@@ -872,17 +953,34 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (!e.agentId) {
       const at = await $.clock.now()
-      await update($, flow, p => p && !p.isFinished && p.title !== '작업 대기' && !p.title.startsWith('중단 · ') ? p : { ...blank(), title: '현재 작업' })
-      await update($, main, () => ({ id: 'main', type: 'main', description: '메인 작업', model: '', status: 'running', startedAt: at, contextTokens: 0, contextMax: 200000, tokens: 0, costUsd: 0, steps: 0, round: 1 }))
+      const prev = await read($, flow)
+      // A flow that was not finished goes on: the person answered a question, or picks
+      // up after an interrupt. Its counts, its workers and the main run's totals stay.
+      const isContinuing = !!prev && !prev.isFinished && prev.title !== '작업 대기' && !prev.title.startsWith('중단 · ')
+      await update($, flow, p => (isContinuing && p ? { ...p, state: undefined } : { ...blank(), title: '현재 작업' }))
+      if (!isContinuing) await update($, agents, carryOver)
+      const window = await contextWindow($)
+      await update($, main, (m): AgentRun | null =>
+        isContinuing && m
+          ? { ...m, status: 'running', priorMs: elapsed(m, m.endedAt ?? at), startedAt: at, endedAt: undefined, round: m.round + 1, contextMax: window ?? m.contextMax }
+          : { id: 'main', type: 'main', description: '메인 작업', model: '', status: 'running', startedAt: at, contextTokens: 0, contextMax: window ?? 200000, tokens: 0, costUsd: 0, steps: 0, round: 1 },
+      )
       await update($, now, () => at)
-      await $.ui.open({ id: PANE, title: tr().pane }).catch(() => {})
+      await openPane($)
     }
+    return next(e)
+  })
+
+  // The person closed the pane: it stays closed until they open it again.
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE && e.origin.kind === 'person') await setClosedByUser($, true)
     return next(e)
   })
 
   on('command.run', { command: 'work-progress' }, async ($, e) => {
     // `/work-progress open` opens the panel, or brings it forward from behind another tab, without toggling it.
     if ((e.args ?? '').trim() === 'open') {
+      await setClosedByUser($, false)
       const at = await $.clock.now()
       await update($, now, () => at)
       await $.ui.open({ id: PANE, title: tr().pane }).catch(() => {})
@@ -899,8 +997,13 @@ export const register: Register = (on, options) => {
     const input = e as unknown as ProgressInput
     const prev = await read($, flow)
     if (isNewFlow(prev, input) && input.title !== undefined) {
-      // A new flow starts with a clean list; agents still running stay.
-      await update($, agents, list => list.filter(a => a.status === 'running'))
+      // A new flow starts with a clean list; agents still running stay. The main run's
+      // totals start over with it, so the panel sums one flow, not two.
+      await update($, agents, carryOver)
+      if (await read($, main)) {
+        const at = await $.clock.now()
+        await update($, main, m => (m ? { ...m, tokens: 0, costUsd: 0, steps: 0, priorMs: 0, startedAt: at, round: 1, isPriceUnknown: false } : m))
+      }
     }
     const next = await update($, flow, p => merge(p, input))
     if (next && input.tasks?.length) await autoOpen($, next.title)
@@ -963,7 +1066,8 @@ export const register: Register = (on, options) => {
 
     const model = usage.model || e.model
     if (!agentId) {
-      await update($, main, p => (p ? withRequest(p, model, usage) : p))
+      const window = await contextWindow($)
+      await update($, main, p => (p ? { ...withRequest(p, model, usage), ...(window ? { contextMax: window } : {}) } : p))
       return result
     }
     await update($, agents, list =>
@@ -989,6 +1093,7 @@ export const register: Register = (on, options) => {
                 (usage.cache_read_input_tokens || 0) +
                 (usage.cache_creation_input_tokens || 0),
               costUsd: a.costUsd + costOf(model, usage, true),
+              isPriceUnknown: a.isPriceUnknown || !isPriced(model),
               steps: a.steps + 1,
             },
       ),
@@ -1000,13 +1105,13 @@ export const register: Register = (on, options) => {
     const agentId = e.agentId
     if (!agentId) {
       const at = await $.clock.now()
-      await update($, main, p => {
+      await update($, main, (p): AgentRun | null => {
         if (!p) return p
         // A turn whose requests went unseen still gets the turn's own sum.
-        const seen = p.steps === 0 && e.usage ? { ...withRequest(p, e.usage.model || p.model, e.usage), costUsd: costOf(e.usage.model || p.model, e.usage, false) } : p
+        const seen = p.steps === 0 && e.usage ? { ...withRequest(p, e.usage.model || p.model, e.usage), costUsd: costOf(e.usage.model || p.model, e.usage, false), isPriceUnknown: !isPriced(e.usage.model || p.model) } : p
         return { ...seen, status: e.reason === 'answer' ? 'done' : 'failed', endedAt: at }
       })
-      await update($, flow, p => p ? { ...p, isFinished: e.reason === 'answer', title: e.reason === 'answer' ? p.title : '중단 · ' + p.title } : p)
+      await update($, flow, p => (p ? endOfTurn(p, e.reason) : p))
       await update($, now, () => at)
     }
     if (agentId) {
@@ -1029,6 +1134,7 @@ export const register: Register = (on, options) => {
                     e.usage.cache_read_input_tokens +
                     e.usage.cache_creation_input_tokens,
                   costUsd: costOf(e.usage.model || a.model, e.usage, false),
+                  isPriceUnknown: !isPriced(e.usage.model || a.model),
                 }
               : {}),
           }
@@ -1074,7 +1180,7 @@ export const register: Register = (on, options) => {
       />
     )
     const isEmpty = list.length === 0 && planned.length === 0
-    const summary = `≈${fmtCost(t.cost)}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.time)}`
+    const summary = `${costText(t.cost, t.isPartial)}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.time)}`
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
@@ -1156,7 +1262,7 @@ export const register: Register = (on, options) => {
             {progress === null ? <Text dimColor>{ctxBar(ctx, barW)}</Text> : <Text color={color}>{ctxBar(progress * 100, barW)}</Text>}
             <Text dimColor>
               {' '}
-              {steps}{s.ctx} {ctx}% · {fmtTokens(a.contextTokens)} ≈{fmtCost(a.costUsd)} {fmtTime(elapsed(a, at))}
+              {steps}{s.ctx} {ctx}% · {fmtTokens(a.contextTokens)} {costText(a.costUsd, a.isPriceUnknown)} {fmtTime(elapsed(a, at))}
             </Text>
           </Text>
         </Box>
@@ -1172,7 +1278,7 @@ export const register: Register = (on, options) => {
           {toggleCompact}
         </Box>
         <Text dimColor>
-          ≈{fmtCost(t.cost)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
+          {costText(t.cost, t.isPartial)} · {fmtTokens(t.tokens)} {s.tokensWord} · {fmtTime(t.time)}
         </Text>
         {p.isCompact ? (
           <Text wrap="truncate-end">
@@ -1268,10 +1374,10 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         <Box flexDirection="row" gap={2}>
           <Box width={titleW} flexShrink={0}>
-            <Text color={f.isFinished ? DONE : ACCENT}>● </Text>
+            <Text color={flowColor(f)}>● </Text>
             <Text wrap="truncate-end">{f.title}</Text>
           </Box>
-          <Text color={f.isFinished ? DONE : ACCENT}>{barText(f, width)}</Text>
+          <Text color={flowColor(f)}>{barText(f, width)}</Text>
           <Text bold>{label(f)}</Text>
           <Text dimColor>{percent}</Text>
           <Text color={CLAY}>▣</Text>

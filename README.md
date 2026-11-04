@@ -37,6 +37,20 @@ claude plugin install mirang-progress --marketplace Mirang-93/mirang-mods
 
 설치한 뒤 새 세션부터 보입니다.
 
+**설치 전제** ([공식 문서](https://code.claude.com/docs/en/plugins/mods/) 기준, 2.1.317에서 테스트)
+
+| 항목 | 필요한 Claude Code 버전 |
+|---|---|
+| 모드 실행: 터미널 | 2.1.287 이상 |
+| 모드 실행: 데스크톱 앱 Code 탭 | 2.1.286 이상 (WSL 세션은 플러그인 미지원) |
+| 모드 실행: VS Code 확장 | 2.1.299 이상 |
+| 세션 안 `/plugin install … --marketplace` | 2.1.275 이상 |
+| 셸 `claude plugin install … --marketplace` | 2.1.292 이상 |
+
+모드는 기본으로 켜져 있지만 모드 API는 버전마다 바뀔 수 있습니다. Claude Code를 업데이트한 뒤 표시가 이상하면 이 저장소의 새 버전을 확인하세요. `claude -p`처럼 화면이 없는 곳에서는 그리지 않습니다.
+
+표시되는 비용과 캐시 시간은 추정치이며 청구액이 아닙니다.
+
 ## 출처와 라이선스
 
 두 모드 모두 MIT 라이선스 모드를 바탕으로 고친 것입니다. 자세한 출처는 각 모드의 README에 있습니다.

@@ -1,6 +1,6 @@
 {
   "name": "mirang-progress",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "모든 작업의 진행도와 캐릭터를 표시하는 한국어 패널. 작업 배정이나 구현 규칙을 주입하지 않습니다.",
   "author": {
     "name": "Mirang"

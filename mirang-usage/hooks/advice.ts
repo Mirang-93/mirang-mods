@@ -9,17 +9,19 @@ export type AdviceInput = {
 export type Advice = { level: 0 | 1 | 2 | 3; icon: string; color: string; text: string }
 
 export function advise({ percent, tokens, isCacheCold, fiveHour }: AdviceInput): Advice {
-  if (percent >= 80) return red('맥락 80% 이상: /park로 저장하고 새 세션을 권장')
-  if (isCacheCold && tokens >= 150_000) return red(`캐시 만료 + 맥락 ${kshort(tokens)}: 다음 메시지가 비싸요, 새 세션을 권장`)
+  // 맥락이 거의 찼을 때만 빨강이다. 캐시 만료는 비용 문제일 뿐이라, 같은 작업을 이어 가면 맥락을 지키는 편이 낫다.
+  if (percent >= 80) return red('맥락 80% 이상: 이어 하기 메모를 남기고 새 세션을 권장')
   if (percent >= 60) return orange('맥락 60% 이상: 지금 작업을 마무리하면 새 세션으로')
-  if (isCacheCold && tokens >= 80_000) return orange(`캐시 만료: 다음 메시지에 ${kshort(tokens)} 토큰을 다시 써요, 주제가 바뀌면 새 세션`)
+  if (isCacheCold && tokens >= 150_000) return orange(`캐시 만료(추정) + 맥락 ${kshort(tokens)}: 다음 메시지가 비싸요. 같은 작업이면 계속, 주제가 바뀌면 새 세션`)
   if ((fiveHour ?? 0) >= 80 && tokens >= 100_000) return orange('5시간 한도 80% 이상: 긴 맥락이 한도를 빨리 써요')
-  if (percent >= 40) return { level: 1, icon: '🟡', color: 'yellow', text: '아직 괜찮아요, 다른 주제는 새 세션에서' }
+  if (isCacheCold && tokens >= 80_000) return yellow(`캐시 만료(추정): 다음 메시지에 ${kshort(tokens)} 토큰을 다시 써요. 주제가 바뀌면 새 세션`)
+  if (percent >= 40) return yellow('아직 괜찮아요, 다른 주제는 새 세션에서')
   return { level: 0, icon: '🟢', color: 'green', text: '이 세션을 계속 써도 돼요' }
 }
 
 const red = (text: string): Advice => ({ level: 3, icon: '🔴', color: 'red', text })
 const orange = (text: string): Advice => ({ level: 2, icon: '🟠', color: 'magenta', text })
+const yellow = (text: string): Advice => ({ level: 1, icon: '🟡', color: 'yellow', text })
 
 // 13.4만, 9,800 처럼 한국식으로 줄인다.
 export function kshort(n: number) {

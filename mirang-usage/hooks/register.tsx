@@ -58,6 +58,8 @@ export const register: Register = on => {
     if (!e.agentId && result.stopReason !== null) {
       const now = await $.clock.now()
       await update($, lastRequestAt, () => now)
+      expiry?.cancel()
+      expiry = undefined
     }
     return result
   })
@@ -69,6 +71,7 @@ export const register: Register = on => {
       const found = ttlFromTranscript(await readTail($))
       if (found !== null) await detect($, found)
       await maybeToast($)
+      await toastAtExpiry($)
     }
     return result
   })
@@ -86,6 +89,7 @@ export const register: Register = on => {
 
     const since = await read($, lastRequestAt)
     const ttl = await ttlMs($)
+    const isGuessed = (await read($, detectedTtl)) === null
     const leftMs = since === null ? null : since + ttl - clockNow
     keepTicking($, leftMs !== null && leftMs > 0 ? WARM_STEP_MS : IDLE_STEP_MS) // 리로드로 타이머를 잃어도 다음 그리기에서 다시 건다
     const isCold = leftMs !== null && leftMs <= 0
@@ -105,7 +109,7 @@ export const register: Register = on => {
           <Text dimColor>{` ${kshort(now.tokens)} / ${kshort(now.window)}`}</Text>
           {isWide && history.length > 1 && <Text dimColor>{` · 직전 ${trend(history)}`}</Text>}
           {isWide && <Text color={adv.color}>{` ${sparkline(history)}`}</Text>}
-          {leftMs !== null && <Text color={isCold ? 'red' : leftMs < WARN_BELOW_MS ? 'yellow' : undefined} dimColor={!isCold}>{isCold ? ' · 캐시 만료' : ` · 캐시 ${clock(leftMs)} 남음`}</Text>}
+          {leftMs !== null && <Text color={isCold ? 'red' : leftMs < WARN_BELOW_MS ? 'yellow' : undefined} dimColor={!isCold}>{cacheText(leftMs, isGuessed)}</Text>}
         </Box>
         {limits.length > 0 && <Text dimColor>{`요금제 ${limits.join(' · ')}`}</Text>}
         <Text color={adv.color}>{`${adv.icon} ${adv.text}`}</Text>
@@ -127,6 +131,23 @@ async function maybeToast($: EngineInterface) {
   const shown = await read($, notifiedLevel)
   if (adv.level >= 2 && adv.level > shown) $.ui.toast(`${adv.icon} ${adv.text}`)
   if (adv.level !== shown) await update($, notifiedLevel, () => adv.level)
+}
+
+// 캐시가 만료되는 순간 판단이 올라갈 수 있으니, 그때 한 번 더 알림을 확인한다.
+let expiry: Timer | undefined
+async function toastAtExpiry($: EngineInterface) {
+  expiry?.cancel()
+  expiry = undefined
+  const since = await read($, lastRequestAt)
+  if (since === null) return
+  const left = since + (await ttlMs($)) - (await $.clock.now())
+  if (left > 0) expiry = $.clock.after(left + 1000, () => void maybeToast($))
+}
+
+// 캐시 시간은 마지막 응답 시각과 수명으로 계산한 추정이다. 수명을 기록에서 못 찾았으면 5분으로 가정했다고 밝힌다.
+function cacheText(leftMs: number, isGuessed: boolean) {
+  const guess = isGuessed ? '(5분 가정)' : ''
+  return leftMs <= 0 ? ` · 캐시 만료${guess || '(추정)'}` : ` · 캐시 약 ${clock(leftMs)} 남음${guess}`
 }
 
 async function ttlMs($: EngineInterface) {

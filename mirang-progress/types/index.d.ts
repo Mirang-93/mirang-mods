@@ -6,6 +6,8 @@ export type PlannedTask = {
   after: number[]
 }
 
+export type FlowState = 'waiting' | 'stopped' | 'error'
+
 export type Flow = {
   title: string
   total: number
@@ -13,6 +15,8 @@ export type Flow = {
   running: number
   phase: Phase
   isFinished: boolean
+  /** How the last main turn ended while the flow was not finished: absent while it runs. */
+  state?: FlowState
   tasks: PlannedTask[]
 }
 
@@ -34,6 +38,12 @@ export type AgentRun = {
   costUsd: number
   steps: number
   round: number
+  /** Working time of earlier turns of the same flow, without the waits between them. */
+  priorMs?: number
+  /** Some of its usage ran on a model with no known price: the cost is a lower bound. */
+  isPriceUnknown?: boolean
+  /** Still running from an earlier flow: shown, but kept out of this flow's totals. */
+  isCarried?: boolean
   /** Self-reported by the worker through the `step` tool. */
   stepDone?: number
   stepTotal?: number
@@ -44,6 +54,8 @@ export type Panel = {
   isCompact: boolean
   isDoneCollapsed: boolean
   autoOpenedFor: string
+  /** The person closed the pane; only `/work-progress` opens it again. */
+  isClosedByUser?: boolean
 }
 
 declare module 'claude-code' {

@@ -34,7 +34,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     await $.tool.call({ tool: PROGRESS, done: 1 } as never)
     expect(opened).toEqual(['mirang-agents'])
-    expect(await $.tool.call({ tool: PROGRESS, finished: true } as never)).toMatchObject({ result: 'ok: 응답 완료' })
+    expect(await $.tool.call({ tool: PROGRESS, finished: true } as never)).toMatchObject({ result: 'ok: 작업 완료' })
   })
 
   // The schema's enum and bounds are advice to the model: a call outside them must still draw.

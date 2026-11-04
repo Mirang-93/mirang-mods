@@ -1,6 +1,6 @@
 {
   "name": "mirang-usage",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "맥락·캐시·요금제 사용량을 한글로 보여주고, 세션을 새로 시작할지 판단해 줍니다. token-weather(Hamza Zafar)를 바탕으로 함.",
   "author": { "name": "Mirang" },
   "license": "MIT",

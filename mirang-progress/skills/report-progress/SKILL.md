@@ -9,9 +9,9 @@ description: mirang-progress 패널의 작업 제목과 실제 단계 진행을 
 
 여러 단계 작업에서는 `mcp__mirang-progress__progress`가 제공되는지 확인하고 다음처럼 보고한다.
 
-1. 시작: 짧은 한국어 `title`, 실제 계획 단계 수 `total`, `done: 0`, `phase: "plan"`.
+1. 시작: 짧은 한국어 `title`, 실제 계획 단계 수 `total`, `done: 0`, `phase: "plan"`. `total`에는 검증 단계까지 포함한다.
 2. 단계 완료: 같은 작업은 제목을 유지하고 실제 완료한 `done`만 갱신한다. 설계는 `design`, 실행은 `delegate`, 검증은 `review`를 쓴다. `delegate`라는 표시 값이 에이전트 생성을 요구하지는 않는다.
-3. 종료: 맡은 범위와 검증이 실제 완료됐을 때만 `finished: true`를 보고한다. 사용자 답변 대기·오류·중단은 완료로 보고하지 않는다. 범위가 바뀌면 단계 수를 정직하게 수정한다.
+3. 종료: 맡은 범위와 검증이 실제 완료됐을 때만 `finished: true`를 보고한다. 완료는 `finished: true`로만 표시되며, `done`이 `total`에 닿아도 보고 전에는 "완료 보고 전"으로 남는다. 사용자 답변 대기·오류·중단은 완료로 보고하지 않는다. 범위가 바뀌면 단계 수를 정직하게 수정한다.
 
 예: 직접 파일을 조사·수정·검증하는 작업은 시작에 `{ "title": "설정 정리", "total": 3, "done": 0, "phase": "plan" }`, 조사 후 `{ "done": 1, "phase": "delegate" }`, 검사 중 `{ "done": 2, "phase": "review" }`, 전부 완료 후 `{ "done": 3, "finished": true }`.
 
