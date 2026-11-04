@@ -44,6 +44,8 @@ export type AgentRun = {
   isPriceUnknown?: boolean
   /** Still running from an earlier flow: shown, but kept out of this flow's totals. */
   isCarried?: boolean
+  /** Drawn only, never stored: the main run's word while its flow waits, stopped or failed. */
+  haltWord?: string
   /** Self-reported by the worker through the `step` tool. */
   stepDone?: number
   stepTotal?: number

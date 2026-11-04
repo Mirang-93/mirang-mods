@@ -756,6 +756,7 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
   const meta = [runModel(a)]
   if (a.round > 1) meta.push(`${s.round} ${a.round}`)
   if (a.status === 'failed') meta.push(s.failed)
+  if (a.haltWord) meta.push(a.haltWord)
   if (a.isCarried) meta.push('이전 작업')
   const barW = textW
   const progress = progressOf(a)
@@ -773,7 +774,7 @@ const agentSvg = (W: number, a: AgentRun, at: number): string => {
 ${steps && stepsW > 30 ? `<text class="t" ${startText(W, 42, 49)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(fitText(steps, 11, stepsW))}</text>` : ''}
 <text class="s" ${endText(W, 42 + barW, 49, true)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${stats}</text>
 <rect class="k" x="${mx(W, 42, barW)}" y="55" width="${barW}" height="4" rx="2"/><rect${progress === null ? ' class="m"' : ''} x="${mx(W, 42, fillW)}" y="55" width="${fillW}" height="4" rx="2"${progress === null ? '' : ` fill="${color}"`}/>
-${statusMark(mx(W, W - 8), 16, a.status, color)}
+${statusMark(mx(W, W - 8), 16, a.haltWord ? 'planned' : a.status, color)}
 <line class="ln" x1="0" y1="65.5" x2="${W}" y2="65.5"/>`,
   )
 }
@@ -898,7 +899,9 @@ const isPeer = (p: SessionSnap, at: number): boolean => {
   if (!p || p.id === selfId || typeof p.updatedAt !== 'number') return false
   if (at - p.updatedAt > (p.state === 'ended' ? ENDED_TTL : PEER_TTL)) return false
   const trees = `${selfRoot}/.claude/worktrees`
-  return isUnder(p.cwd, trees) || isUnder(p.root, trees)
+  // The folder a session started in, not where its shell is now: a parent that steps into a
+  // child's worktree to check or merge is still the parent.
+  return isUnder(p.root, trees)
 }
 
 const snapState = (f: Flow | null, m: AgentRun | null, isEnded: boolean): SessionSnap['state'] => {
@@ -1361,8 +1364,13 @@ export const register: Register = (on, options) => {
     const p: Panel = await read($, panel)
     const at = Math.max(await read($, now), ...list.map(a => a.startedAt), 0)
 
-    const running = list.filter(a => a.status === 'running').reverse()
-    const finished = list.filter(a => a.status !== 'running').reverse()
+    // While the flow waits for the person (or stopped), the main run is not finished: it
+    // stays with the running ones, marked with the word the band shows.
+    const haltWord = f && !f.isFinished && f.state ? (f.state === 'waiting' ? (f.total && f.done >= f.total ? s.unconfirmed : s.waiting) : f.state === 'stopped' ? s.stopped : s.errored) : ''
+    const shown = list.map(a => (a.type === 'main' && haltWord && a.status !== 'running' ? { ...a, haltWord } : a))
+    const isActive = (a: AgentRun) => a.status === 'running' || !!a.haltWord
+    const running = shown.filter(isActive).reverse()
+    const finished = shown.filter(a => !isActive(a)).reverse()
     const planned = plannedOf(f, list)
     const t = totals(list, at)
     // The pane's title says "Agents"; inside, only the flow's own name.
@@ -1475,7 +1483,7 @@ export const register: Register = (on, options) => {
             <Text bold wrap="truncate-end">
               {a.description || a.type}
             </Text>
-            <Text color={a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : color}>{STATUS_GLYPH[a.status]}</Text>
+            <Text color={a.haltWord ? 'yellow' : a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : color}>{a.haltWord ? `◷ ${a.haltWord}` : STATUS_GLYPH[a.status]}</Text>
           </Box>
           <Text dimColor wrap="truncate-end">
             {'  '}
@@ -1509,7 +1517,7 @@ export const register: Register = (on, options) => {
           <Text wrap="truncate-end">
             {[...running, ...finished].map(a => (
               <Text key={a.id} color={colorOf(tierOf(a.type))}>
-                {STATUS_GLYPH[a.status]}{' '}
+                {a.haltWord ? '◷' : STATUS_GLYPH[a.status]}{' '}
               </Text>
             ))}
             {planned.map(pl => (

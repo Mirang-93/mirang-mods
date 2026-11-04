@@ -246,3 +246,14 @@ test('the person can close the setup hint', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /CLAUDE\.md에 아래 한 줄/ })).toBeUndefined()
 })
 
+test('while the flow waits for the person, the main row stays with the running, not the finished', async ($, on) => {
+  await start($, on)
+  await $.turn.start({ turnId: 'one' } as never)
+  await $.tool.call({ tool: TOOL, title: '조율 작업', phase: 'delegate', total: 6, done: 3 } as never)
+  await $.turn.complete({ turnId: 'one', reason: 'answer', answer: '?' } as never)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: 'mirang-agents', props: pane })
+  expect(await ui.find({ type: 'Text', text: /◷ 답변 대기/ })).toBeDefined()
+  // Nothing finished: no "종료" toggle at all.
+  expect(await ui.find({ key: 'done' })).toBeUndefined()
+})
+

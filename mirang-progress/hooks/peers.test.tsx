@@ -75,3 +75,12 @@ test('summaries older than a week are removed at session start, only in their ow
   expect(runs).toEqual([['find', DIR, '-maxdepth', '1', '-type', 'f', '-name', '*.json', '-mtime', '+7', '-delete']])
 })
 
+test('a session whose shell stepped into a worktree is still judged by the folder it started in', async ($, on) => {
+  await parent($, on, {
+    // A sibling of the parent's: started in the project folder, now inside a child's worktree.
+    'wanderer.json': { ...snap('wanderer', '/proj/.claude/worktrees/m1-2-large-text-5e8375', { title: '합치는 중인 조율 세션' }), root: '/proj' },
+  })
+  const out = await alts($)
+  expect(out.some(a => a.includes('합치는 중인 조율 세션'))).toBe(false)
+})
+
