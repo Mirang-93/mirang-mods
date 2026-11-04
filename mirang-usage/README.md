@@ -1,0 +1,34 @@
+# mirang-usage
+
+Claude Code 입력창 위에 **맥락·캐시·요금제 사용량**을 한글로 보여 주고, 지금 세션을 계속 써도 되는지 판단해 주는 모드입니다.
+
+```
+맥락 18% 3.6만 / 20만 · 직전 +1.2만 ▁▂▃▅ · 캐시 58:41 남음
+요금제 5시간 42% (2시간 13분 후 리셋) · 7일 18% · 이번 세션 $1.23
+🟢 이 세션을 계속 써도 돼요
+```
+
+## 보여 주는 것
+
+- **맥락**: 사용률(%)과 토큰 수, 직전 응답 대비 증감, 최근 흐름 막대
+- **캐시**: 프롬프트 캐시가 만료되기까지 남은 시간. 5분·1시간 캐시를 응답에서 알아서 감지하며, 캐시가 살아 있는 동안 1초마다 갱신
+- **요금제**: 5시간·7일 한도 사용률과 리셋까지 남은 시간, 이번 세션 비용
+- **판단**: 🟢 계속 / 🟡 괜찮음 / 🟠 마무리 권장 / 🔴 새 세션 권장. 🟠·🔴로 올라갈 때 한 번 알림
+
+## 설치
+
+이 모드는 [mirang-mods](../README.md) 저장소에 들어 있습니다. 설치 방법은 저장소 첫 화면의 README를 보세요.
+
+## 출처와 라이선스
+
+이 모드는 [Hamza Zafar](https://github.com/hamzafer)의 [claude-code-mods](https://github.com/hamzafer/claude-code-mods)(MIT 라이선스)에 있는 모드들을 바탕으로 만들었습니다.
+
+| 원작 | 가져오거나 참고한 것 |
+|---|---|
+| [token-weather](https://github.com/hamzafer/claude-code-mods/tree/main/mods/token-weather) | 맥락 사용량 기록과 흐름 막대, 응답에서 캐시 수명(5분·1시간)을 감지하는 방법과 캐시 카운트다운. 이 모드의 바탕 |
+| [usage-meter](https://github.com/hamzafer/claude-code-mods/tree/main/mods/usage-meter) | 요금제 한도(5시간·7일·지출 한도)와 리셋까지 남은 시간, 세션 비용을 함께 보여 주는 방식 |
+| [shared/bands.ts](https://github.com/hamzafer/claude-code-mods/blob/main/shared/bands.ts) | 입력창 위 여러 띠의 순서를 맞추는 공용 파일(`hooks/bands.ts`, 원본 그대로) |
+
+여기에 더한 것: 한글 표시, 세션을 새로 시작할지 알려 주는 판단(🟢🟡🟠🔴)과 알림, 캐시가 살아 있는 동안 1초마다 갱신하는 카운트다운, 캐시 만료 뒤에도 계속 갱신되는 리셋 시간.
+
+라이선스는 [MIT](LICENSE)이며, 원작자의 저작권 표기를 함께 둡니다.
