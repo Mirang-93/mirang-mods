@@ -9,6 +9,14 @@ Claude Code를 한국어로 보기 좋게 만드는 모드 모음입니다. 필�
 
 두 모드를 같이 설치하면 입력창 위에 현재 작업 줄이 위, 사용량 띠가 아래로 함께 쌓입니다.
 
+![두 모드를 같이 쓸 때 입력창 위](images/overview.png)
+
+| mirang-usage | mirang-progress |
+|---|---|
+| ![사용량 띠](images/mirang-usage.png) | ![작업 진행도 패널](images/mirang-progress.png) |
+
+화면은 예시 작업 데이터로 두 모드가 그린 모습입니다.
+
 ## 설치
 
 **터미널의 Claude Code** 프롬프트에서 원하는 것을 입력합니다. 처음 한 번은 마켓플레이스를 추가할지 묻는데, `y`를 누르고 범위는 Enter(사용자 전체)로 고르면 됩니다.
@@ -28,14 +36,6 @@ claude plugin install mirang-progress --marketplace Mirang-93/mirang-mods
 **데스크톱 앱**에서는 `/plugin`이 동작하지 않습니다. 프롬프트 옆 **+** → **Plugins** → **Add marketplace**에 `Mirang-93/mirang-mods`를 넣고, 원하는 모드를 **Add plugin**으로 추가하세요. 터미널에서 설치하면 데스크톱 앱에도 같이 적용됩니다.
 
 설치한 뒤 새 세션부터 보입니다.
-
-### 비공개 저장소인 동안
-
-지금은 초대받은 GitHub 계정만 설치할 수 있습니다.
-
-1. 저장소 초대 메일(또는 https://github.com/Mirang-93/mirang-mods/invitations)에서 초대를 수락합니다.
-2. 컴퓨터에 GitHub 인증을 해 둡니다: [GitHub CLI](https://cli.github.com)를 설치하고 `gh auth login`, 이어서 `gh auth setup-git`.
-3. 위 설치 명령을 실행합니다.
 
 ## 출처와 라이선스
 
