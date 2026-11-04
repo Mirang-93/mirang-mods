@@ -194,3 +194,32 @@ test('a model with no known price is not guessed at', async ($, on) => {
   expect(alts.some(a => a.includes('단가 미상'))).toBe(true)
   expect(alts.some(a => a.includes('≈$4.00'))).toBe(false)
 })
+
+test('workers of turns with nothing reported stay in view on the next turn', async ($, on) => {
+  let n = 0
+  on('agent.spawn', (_$: any, e: any) => ({ model: 'claude-haiku-5-5', agentId: e.description === '병렬 A' ? 'w1' : `w${++n + 1}` }) as never)
+  on('turn.step', async function* (_$: any, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { model: 'claude-haiku-5-5', input_tokens: 50_000, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } as never
+  })
+  await start($, on)
+  await $.turn.start({ turnId: 'one' } as never)
+  for (const d of ['병렬 A', '병렬 B']) {
+    await $.agent.spawn({ tool_use_id: d, prompt: 'p', description: d, subagentType: 'general-purpose', provider: 'engine', parentModel: 'claude-opus-5-5', background: true, fork: false } as never)
+  }
+  for await (const _ of ($.turn.step as any)({ turnId: 'a1', index: 0, model: 'claude-haiku-5-5', messageCount: 1, agentId: 'w1' })) void _
+  // A finishes its first run; the main turn ends; a notification starts the next turn.
+  await ($.turn.complete as any)({ turnId: 'a1', agentId: 'w1', reason: 'answer', answer: 'waiting on background work' })
+  await $.turn.complete({ turnId: 'one', reason: 'answer', answer: 'ok' } as never)
+  await $.turn.start({ turnId: 'two' } as never)
+  let alts = await paneAlts($)
+  expect(alts.some(a => a.startsWith('병렬 A:'))).toBe(true)
+  expect(alts.some(a => a.startsWith('병렬 B:') && a.includes('진행 중'))).toBe(true)
+
+  // A runs again when its background work reports back: running, its earlier usage kept.
+  await $.agent.spawn({ tool_use_id: '병렬 A', prompt: 'p', description: '병렬 A', subagentType: 'general-purpose', provider: 'engine', parentModel: 'claude-opus-5-5', background: true, fork: false } as never)
+  alts = await paneAlts($)
+  expect(alts.some(a => a.startsWith('병렬 A:') && a.includes('진행 중'))).toBe(true)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: 'mirang-agents', props: pane })
+  expect(await ui.find({ type: 'Text', text: /50k/ })).toBeDefined()
+})
+

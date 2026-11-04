@@ -956,8 +956,13 @@ export const register: Register = (on, options) => {
       const prev = await read($, flow)
       // A flow that was not finished goes on: the person answered a question, or picks
       // up after an interrupt. Its counts, its workers and the main run's totals stay.
-      const isContinuing = !!prev && !prev.isFinished && prev.title !== '작업 대기' && !prev.title.startsWith('중단 · ')
-      await update($, flow, p => (isContinuing && p ? { ...p, state: undefined } : { ...blank(), title: '현재 작업' }))
+      // Turns with nothing reported are one ongoing "current work" too: a turn ending is
+      // no task boundary, so workers launched in one turn stay in view in the next.
+      // Only a reported flow's `finished`, or a new title, starts over.
+      const isUnreported = !!prev && !prev.total && !prev.tasks.length
+      const isContinuing =
+        !!prev && (!prev.isFinished || isUnreported) && prev.title !== '작업 대기' && !prev.title.startsWith('중단 · ')
+      await update($, flow, p => (isContinuing && p ? { ...p, state: undefined, isFinished: false } : { ...blank(), title: '현재 작업' }))
       if (!isContinuing) await update($, agents, carryOver)
       const window = await contextWindow($)
       await update($, main, (m): AgentRun | null =>
@@ -967,6 +972,18 @@ export const register: Register = (on, options) => {
       )
       await update($, now, () => at)
       await openPane($)
+    }
+    if (e.agentId) {
+      // A worker runs again (its own background work reported back): it is working,
+      // not finished, and its earlier runs' time stays counted.
+      const at = await $.clock.now()
+      await update($, agents, list =>
+        list.map((a): AgentRun =>
+          a.agentId === e.agentId && a.status !== 'running'
+            ? { ...a, status: 'running', priorMs: elapsed(a, a.endedAt ?? at), startedAt: at, endedAt: undefined }
+            : a,
+        ),
+      )
     }
     return next(e)
   })
@@ -1050,7 +1067,20 @@ export const register: Register = (on, options) => {
         steps: 0,
         round,
       }
-      return [...list.filter(a => a.id !== run.id), run].slice(-200)
+      // A resumed run spawns again under the same id: it keeps its tokens, cost and time.
+      const known = list.find(a => a.id === run.id)
+      if (known) {
+        const resumed: AgentRun = {
+          ...known,
+          model: started.model || known.model,
+          status: 'running',
+          priorMs: known.status === 'running' ? known.priorMs : elapsed(known, known.endedAt ?? at),
+          startedAt: known.status === 'running' ? known.startedAt : at,
+          endedAt: undefined,
+        }
+        return list.map(a => (a.id === run.id ? resumed : a))
+      }
+      return [...list, run].slice(-200)
     })
     await update($, now, () => at)
     await autoOpen($, 'any-agent')
