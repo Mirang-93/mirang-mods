@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
+import type { AgentRun, Flow, Panel, Phase, PlannedTask, SessionSnap } from '../types'
 
 const flow = atom({ plugin: 'mirang-progress', key: 'flow' } as const, null)
 const agents = atom({ plugin: 'mirang-progress', key: 'agents' } as const, [])
@@ -13,6 +13,7 @@ const panel = atom({ plugin: 'mirang-progress', key: 'panel' } as const, {
 const now = atom({ plugin: 'mirang-progress', key: 'now' } as const, 0)
 
 const main = atom({ plugin: 'mirang-progress', key: 'main' } as const, null as AgentRun | null)
+const peers = atom({ plugin: 'mirang-progress', key: 'peers' } as const, [] as SessionSnap[])
 const TOOL = 'mcp__mirang-progress__progress'
 const STEP_TOOL = 'mcp__mirang-progress__step'
 const PANE = 'mirang-agents'
@@ -875,10 +876,172 @@ async function contextWindow($: EngineInterface): Promise<number | undefined> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Other sessions of the same project. Each session is its own process, so the panel
+// cannot see another's state: every session writes a small summary of its own work
+// to a shared folder, and reads the summaries of sessions working in its project
+// worktrees (`.claude/worktrees/…` under its project, where the sessions it starts run). The app's parent-child link is not visible to a mod; the folder is.
+
+const PEER_TTL = 24 * 3600_000
+const ENDED_TTL = 2 * 3600_000
+const MAX_PEERS = 20
+let selfId = ''
+let selfRoot = ''
+let selfCwd = ''
+let peersDir = ''
+let lastPublish = 0
+
+const isUnder = (path: string, base: string): boolean => !!path && !!base && (path === base || path.startsWith(base + '/'))
+
+// A peer works in this project's folder or in a worktree under it; this session is not its own peer.
+const isPeer = (p: SessionSnap, at: number): boolean => {
+  if (!p || p.id === selfId || typeof p.updatedAt !== 'number') return false
+  if (at - p.updatedAt > (p.state === 'ended' ? ENDED_TTL : PEER_TTL)) return false
+  const trees = `${selfRoot}/.claude/worktrees`
+  return isUnder(p.cwd, trees) || isUnder(p.root, trees)
+}
+
+const snapState = (f: Flow | null, m: AgentRun | null, isEnded: boolean): SessionSnap['state'] => {
+  if (isEnded) return 'ended'
+  if (!f) return 'idle'
+  if (f.isFinished && (f.total || f.tasks.length)) return 'finished'
+  if (m?.status === 'running') return 'working'
+  return f.state ?? 'idle'
+}
+
+async function setUpPeers($: EngineInterface): Promise<void> {
+  try {
+    selfId = await $.session.id()
+    selfRoot = await $.session.root()
+    selfCwd = await $.session.cwd()
+    const home = await $.env.get('HOME')
+    const config = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? (home ? `${home}/.claude` : '')
+    peersDir = config ? `${config}/mirang-progress/sessions` : ''
+  } catch {
+    peersDir = ''
+  }
+}
+
+// Writes this session's summary for its peers; never fails the hook that calls it.
+async function publish($: EngineInterface, isEnded = false): Promise<void> {
+  if (!peersDir || !selfId) return
+  try {
+    const at = await $.clock.now()
+    const f = await read($, flow)
+    const m = await read($, main)
+    const list = await read($, agents)
+    const t = totals(m ? [m, ...list] : list, at)
+    const snap: SessionSnap = {
+      id: selfId,
+      root: selfRoot,
+      cwd: selfCwd,
+      title: f && f.title !== '작업 대기' ? f.title : '',
+      label: f ? label(f) : '',
+      done: f?.done ?? 0,
+      total: f?.total ?? 0,
+      state: snapState(f, m, isEnded),
+      costUsd: t.cost,
+      tokens: t.tokens,
+      isPartial: t.isPartial,
+      workers: list.filter(a => a.status === 'running' && !a.isCarried).length,
+      activeMs: t.time,
+      updatedAt: at,
+    }
+    lastPublish = at
+    await $.fs.write(`${peersDir}/${selfId.replace(/[^A-Za-z0-9_-]/g, '_')}.json`, JSON.stringify(snap))
+  } catch {
+    // A summary that could not be written only leaves the peers' panels a little behind.
+  }
+}
+
+// Reads the peers' summaries; redraws only when something changed.
+async function refreshPeers($: EngineInterface): Promise<void> {
+  if (!peersDir || !selfRoot) return
+  try {
+    const at = await $.clock.now()
+    const entries = await $.fs.list(peersDir)
+    const found: SessionSnap[] = []
+    for (const en of entries) {
+      if (en.kind !== 'file' || !en.name.endsWith('.json')) continue
+      if (typeof en.mtimeMs === 'number' && at - en.mtimeMs > PEER_TTL) continue
+      try {
+        const snap = JSON.parse(String(await $.fs.read(`${peersDir}/${en.name}`))) as SessionSnap
+        if (isPeer(snap, at)) found.push(snap)
+      } catch {
+        continue
+      }
+    }
+    found.sort((a, b) => b.updatedAt - a.updatedAt)
+    const next = found.slice(0, MAX_PEERS)
+    const prev = await read($, peers)
+    if (JSON.stringify(prev) !== JSON.stringify(next)) await update($, peers, () => next)
+  } catch {
+    // No folder yet: no peer has written.
+  }
+}
+
+// Summaries older than a week are removed once per session start; a refusal costs nothing.
+async function pruneSummaries($: EngineInterface): Promise<void> {
+  if (!peersDir) return
+  await $.process.run(['find', peersDir, '-maxdepth', '1', '-type', 'f', '-name', '*.json', '-mtime', '+7', '-delete']).catch(() => undefined)
+}
+
+// Until the model has reported progress once, the panel says how to make it report.
+const HINT_LINE = '- 여러 단계 작업은 시작할 때와 단계를 마칠 때마다 mirang-progress 진행도 도구(mcp__mirang-progress__progress)로 제목·전체 단계·완료 단계를 보고한다.'
+const HINT_LINES = 4
+
+async function hideHint($: EngineInterface): Promise<void> {
+  if ((await read($, panel)).isHintHidden) return
+  await update($, panel, p => ({ ...p, isHintHidden: true }))
+  await $.store.set('hintHidden', true).catch(() => {})
+}
+
+const PEER_WORD: Record<SessionSnap['state'], string> = {
+  working: '진행 중', waiting: '답변 대기', stopped: '중단', error: '오류', finished: '완료', idle: '대기', ended: '세션 종료',
+}
+
+// Where a peer works, in a few words: its worktree's name, or the project folder's.
+const peerPlace = (p: SessionSnap): string => {
+  const base = (p.cwd || p.root).split('/').filter(Boolean).pop() ?? ''
+  return base.replace(/-[0-9a-f]{6}$/, '')
+}
+
+const ago = (ms: number): string => (ms < 60_000 ? '방금' : ms < 3600_000 ? `${Math.round(ms / 60_000)}분 전` : `${Math.round(ms / 3600_000)}시간 전`)
+
+const peerStatus = (p: SessionSnap): string => (p.state === 'working' ? 'running' : p.state === 'finished' ? 'done' : p.state === 'error' || p.state === 'stopped' ? 'failed' : 'planned')
+
+const peerSvg = (W: number, p: SessionSnap, at: number): string => {
+  const color = p.state === 'working' ? ACCENT : p.state === 'finished' ? DONE : p.state === 'waiting' ? WAIT : p.state === 'error' || p.state === 'stopped' ? HALT : '#888780'
+  const textW = W - 42 - 22
+  const steps = p.total ? `${p.done}/${p.total}` : '단계 미보고'
+  const meta = [PEER_WORD[p.state] ?? p.state, peerPlace(p), p.workers ? `작업자 ${p.workers}` : ''].filter(Boolean).join('  ·  ')
+  const stats = `${fmtTokens(p.tokens)}  ${costText(p.costUsd, p.isPartial)}  ${fmtTime(p.activeMs)}  ·  ${ago(at - p.updatedAt)}`
+  const fillW = Math.round(textW * (p.total ? Math.min(1, p.done / p.total) : 0))
+  return svg(
+    W,
+    66,
+    `${rowCrab(W, 0, 14, 'other', p.state !== 'working', p.state === 'working')}
+<text class="t" ${startText(W, 42, 18)} font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(p.title || peerPlace(p) || '세션', 13, textW))}</text>
+<text ${startText(W, 42, 34)} font-family="${FONT}" font-size="11"><tspan fill="${color}">${xml(meta)}</tspan></text>
+<text class="t" ${startText(W, 42, 49)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(steps)}</text>
+<text class="s" ${endText(W, 42 + textW, 49, true)} font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(stats)}</text>
+<rect class="k" x="${mx(W, 42, textW)}" y="55" width="${textW}" height="4" rx="2"/><rect x="${mx(W, 42, fillW)}" y="55" width="${fillW}" height="4" rx="2" fill="${color}"/>
+${statusMark(mx(W, W - 8), 16, peerStatus(p), color)}
+<line class="ln" x1="0" y1="65.5" x2="${W}" y2="65.5"/>`,
+  )
+}
+
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     lang = await detectLang($, options.language)
+    await setUpPeers($)
+    await publish($)
+    await refreshPeers($)
+    await pruneSummaries($)
+    if ((await $.store.get('hintHidden').catch(() => undefined)) === true) await update($, panel, p => ({ ...p, isHintHidden: true }))
+    // Other sessions of the project: read their summaries every few seconds.
+    $.clock.every(3000, () => void refreshPeers($))
     await update($, flow, p => p ?? blank())
     await openPane($)
     await $.tool.register({
@@ -945,6 +1108,7 @@ export const register: Register = (on, options) => {
         if (!list.some(a => a.status === 'running') && (await read($, main))?.status !== 'running') return
         const at = await $.clock.now()
         await update($, now, () => at)
+        if (at - lastPublish >= 5000) await publish($)
       })()
     })
     return started
@@ -972,6 +1136,7 @@ export const register: Register = (on, options) => {
       )
       await update($, now, () => at)
       await openPane($)
+      await publish($)
     }
     if (e.agentId) {
       // A worker runs again (its own background work reported back): it is working,
@@ -985,6 +1150,12 @@ export const register: Register = (on, options) => {
         ),
       )
     }
+    return next(e)
+  })
+
+  // The session closes: its peers see it ended, then let it go.
+  on('session.end', async ($, e, next) => {
+    await publish($, true)
     return next(e)
   })
 
@@ -1023,7 +1194,9 @@ export const register: Register = (on, options) => {
       }
     }
     const next = await update($, flow, p => merge(p, input))
+    await hideHint($)
     if (next && input.tasks?.length) await autoOpen($, next.title)
+    await publish($)
     return { result: `ok: ${label(next ?? blank())}` }
   })
 
@@ -1172,6 +1345,7 @@ export const register: Register = (on, options) => {
       )
       await update($, now, () => at)
     }
+    await publish($)
     return next(e)
   })
 
@@ -1182,6 +1356,7 @@ export const register: Register = (on, options) => {
     const workerList = await read($, agents)
     const current = await read($, main)
     const f = await read($, flow)
+    const peerList = await read($, peers)
     const list = current ? [{ ...current, description: f?.title || '메인 작업', stepDone: f?.done, stepTotal: f?.total || undefined }, ...workerList] : workerList
     const p: Panel = await read($, panel)
     const at = Math.max(await read($, now), ...list.map(a => a.startedAt), 0)
@@ -1209,7 +1384,16 @@ export const register: Register = (on, options) => {
         onPress={() => update($, panel, prev => ({ ...prev, isDoneCollapsed: !prev.isDoneCollapsed }))}
       />
     )
-    const isEmpty = list.length === 0 && planned.length === 0
+    const isEmpty = list.length === 0 && planned.length === 0 && peerList.length === 0
+    const peerHead = `하위 세션 · ${peerList.length}`
+    const showHint = !p.isHintHidden && !!f && !f.total && !f.tasks.length
+    const hint = showHint ? (
+      <Box key="hint" flexDirection="column" marginBottom={1}>
+        <Text dimColor>진행 막대는 Claude가 진행도를 보고해야 채워집니다. CLAUDE.md에 아래 한 줄을 넣으세요.</Text>
+        <Text>{HINT_LINE}</Text>
+        <Button key="hint-close" label="안내 닫기" plain onPress={() => hideHint($)} />
+      </Box>
+    ) : null
     const summary = `${costText(t.cost, t.isPartial)}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.time)}`
 
     if (e.surface === 'desktop' && 'Svg' in ui) {
@@ -1232,8 +1416,8 @@ export const register: Register = (on, options) => {
         )
       }
       const shownDone = p.isDoneCollapsed ? 0 : finished.length
-      const lines = 1 + (isEmpty ? 1 : 0) + (running.length > 0 ? 1 : 0) + (finished.length > 0 ? 1 : 0) + (planned.length > 0 ? 1 : 0)
-      const gridH = headerHeight(title) + lines * LINE_H + (running.length + shownDone) * 66 + planned.length * 46
+      const lines = 1 + (showHint ? HINT_LINES + 2 : 0) + (isEmpty ? 1 : 0) + (running.length > 0 ? 1 : 0) + (finished.length > 0 ? 1 : 0) + (planned.length > 0 ? 1 : 0) + (peerList.length > 0 ? 1 : 0)
+      const gridH = headerHeight(title) + lines * LINE_H + (running.length + shownDone + peerList.length) * 66 + planned.length * 46
       return (
         <Box flexDirection="column">
           {/* The grid sizes the pane; the content is placed over it, as an
@@ -1244,10 +1428,21 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column" position="absolute" top={0} left={0} right={0} alignItems={align}>
             <Svg source={headerSvg(W, title, t)} alt={title ? `${title}: ${summary}` : summary} width={W} height={headerHeight(title)} />
             {toggleCompact}
+            {hint}
             {isEmpty && <Text dimColor>{s.empty}</Text>}
             {running.length > 0 && section('h-run', `${s.running} · ${running.length}`)}
             {running.map(a => (
               <Svg key={a.id} source={agentSvg(W, a, at)} alt={`${a.description}: ${modelName(a.model)}, ${s.isRunning}`} width={W} height={66} />
+            ))}
+            {peerList.length > 0 && section('h-peer', peerHead)}
+            {peerList.map(pe => (
+              <Svg
+                key={`peer-${pe.id}`}
+                source={peerSvg(W, pe, Math.max(at, pe.updatedAt))}
+                alt={`${pe.title || peerPlace(pe)}: 하위 세션, ${PEER_WORD[pe.state] ?? pe.state}, ${pe.total ? `${pe.done}/${pe.total}` : '단계 미보고'}, ${costText(pe.costUsd, pe.isPartial)}`}
+                width={W}
+                height={66}
+              />
             ))}
             {finished.length > 0 && toggleDone}
             {!p.isDoneCollapsed &&
@@ -1325,9 +1520,23 @@ export const register: Register = (on, options) => {
           </Text>
         ) : (
           <Box flexDirection="column" marginTop={1}>
+            {hint}
             {isEmpty && <Text dimColor>{s.empty}</Text>}
             {running.length > 0 && <Text dimColor>{s.running} · {running.length}</Text>}
             {running.map(row)}
+            {peerList.length > 0 && <Text dimColor>{peerHead}</Text>}
+            {peerList.map(pe => (
+              <Box key={`peer-${pe.id}`} flexDirection="column" marginBottom={1}>
+                <Text bold wrap="truncate-end">
+                  ▤ {pe.title || peerPlace(pe) || '세션'}
+                </Text>
+                <Text dimColor wrap="truncate-end">
+                  {'  '}
+                  {PEER_WORD[pe.state] ?? pe.state} · {peerPlace(pe)}
+                  {pe.workers ? ` · 작업자 ${pe.workers}` : ''} · {pe.total ? `${pe.done}/${pe.total}` : '단계 미보고'} · {costText(pe.costUsd, pe.isPartial)} · {ago(Math.max(0, at - pe.updatedAt))}
+                </Text>
+              </Box>
+            ))}
             {finished.length > 0 && toggleDone}
             {!p.isDoneCollapsed && finished.map(row)}
             {planned.length > 0 && <Text dimColor>{s.planned} · {planned.length}</Text>}

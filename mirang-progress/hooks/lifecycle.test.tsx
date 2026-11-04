@@ -223,3 +223,26 @@ test('workers of turns with nothing reported stay in view on the next turn', asy
   expect(await ui.find({ type: 'Text', text: /50k/ })).toBeDefined()
 })
 
+test('until progress is reported once, the panel says how to make Claude report it', async ($, on) => {
+  await start($, on)
+  await $.turn.start({ turnId: 'one' } as never)
+  const mount = () => $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: 'mirang-agents', props: pane })
+  let ui = await mount()
+  expect(await ui.find({ type: 'Text', text: /CLAUDE\.md에 아래 한 줄/ })).toBeDefined()
+  await ui.unmount()
+  await $.tool.call({ tool: TOOL, title: '보고한 작업', phase: 'delegate', total: 2, done: 0 } as never)
+  await $.tool.call({ tool: TOOL, finished: true } as never)
+  await $.turn.complete({ turnId: 'one', reason: 'answer', answer: 'ok' } as never)
+  await $.turn.start({ turnId: 'two' } as never)
+  ui = await mount()
+  expect(await ui.find({ type: 'Text', text: /CLAUDE\.md에 아래 한 줄/ })).toBeUndefined()
+})
+
+test('the person can close the setup hint', async ($, on) => {
+  await start($, on)
+  await $.turn.start({ turnId: 'one' } as never)
+  const ui = await $.ui.mount({ plugin: PLUGIN, surface: 'terminal', component: 'Pane', requestId: 'mirang-agents', props: pane })
+  await ui.press({ key: 'hint-close' })
+  expect(await ui.find({ type: 'Text', text: /CLAUDE\.md에 아래 한 줄/ })).toBeUndefined()
+})
+

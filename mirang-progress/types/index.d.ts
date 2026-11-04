@@ -50,12 +50,32 @@ export type AgentRun = {
   stepNote?: string
 }
 
+/** One session's progress, as it writes it for the other sessions of the same project. */
+export type SessionSnap = {
+  id: string
+  root: string
+  cwd: string
+  title: string
+  label: string
+  done: number
+  total: number
+  state: 'working' | 'waiting' | 'stopped' | 'error' | 'finished' | 'idle' | 'ended'
+  costUsd: number
+  tokens: number
+  isPartial?: boolean
+  workers: number
+  activeMs: number
+  updatedAt: number
+}
+
 export type Panel = {
   isCompact: boolean
   isDoneCollapsed: boolean
   autoOpenedFor: string
   /** The person closed the pane; only `/work-progress` opens it again. */
   isClosedByUser?: boolean
+  /** Progress was reported once, in any session, or the person closed the hint: no setup hint. */
+  isHintHidden?: boolean
 }
 
 declare module 'claude-code' {
@@ -64,6 +84,7 @@ declare module 'claude-code' {
       main: AgentRun | null
       flow: Flow | null
       agents: AgentRun[]
+      peers: SessionSnap[]
       panel: Panel
       now: number
     }
