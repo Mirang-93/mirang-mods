@@ -16,6 +16,14 @@ Claude Code 옆에 **작업 진행도 패널**을, 입력창 위에 **현재 작
 - 하위 작업자는 `mcp__mirang-progress__step`으로 자기 단계만 보고합니다.
 - 단계가 보고되지 않으면 퍼센트를 지어내지 않고 "단계 미보고"와 —를 표시합니다.
 
+### 진행 막대가 채워지게 하려면
+
+Claude가 진행도를 보고해야 막대가 채워집니다. 보고가 없으면 캐릭터·토큰·비용·시간만 움직이고 막대에는 "단계 미보고"가 나옵니다. 매번 보고하게 하려면 `~/.claude/CLAUDE.md`(모든 프로젝트) 또는 프로젝트의 `CLAUDE.md`에 아래 한 줄을 넣으세요.
+
+```
+- 여러 단계 작업은 시작할 때와 단계를 마칠 때마다 mirang-progress 진행도 도구(mcp__mirang-progress__progress)로 제목·전체 단계·완료 단계를 보고한다.
+```
+
 ## 출처와 라이선스
 
 [johnnyvizz](https://github.com/johnnyvizz)의 [savvy-progress](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress)(MIT 라이선스)에서 진행 막대·픽셀 캐릭터·작업자 패널을 가져와 한국어 표시 전용으로 고친 것입니다.
